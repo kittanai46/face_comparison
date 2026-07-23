@@ -1,143 +1,307 @@
-# Face comparison / liveness check
+# Face Comparison — Active Liveness Detection
 
-Flutter prototype for on-device face-presence and active liveness checking.
-The scan has two stages:
+แอป Flutter สำหรับทดลองตรวจสอบว่าใบหน้าหน้ากล้องเป็นบุคคลจริง
+หรือเป็นการนำเสนอผ่านภาพถ่าย หน้าจอ และวิดีโอที่บันทึกไว้ โดยประมวลผลบนอุปกรณ์
+(on-device) และใช้ active challenge หลายรูปแบบร่วมกัน
 
-1. A medium-distance guide asks the user to keep their face between 20% and
-   42% of the camera image width (the near stage starts at 50%). One
-   high-confidence face of the expected size must remain stable for several
-   frames. An EfficientDet-Lite COCO detector also rejects repeated detections
-   of presentation media (`cell phone`, `tv`, `laptop`, or `book`) before the
-   near stage unlocks.
-2. The guide grows and asks the user to approach until the face occupies at
-   least 50% of the camera width. The app measures baseline
-   RGB values, generates a four-pulse one-time RGBW code with randomized
-   order at full intensity, and verifies that the
-   colour proportions observed by the camera follow that exact code. A single
-   unpredictable white pulse secretly checks for a blink or squint that
-   starts only after the pulse before requiring head turns. White
-   reflection magnitude is diagnostic only because bright ambient light can
-   leave no additional camera headroom; the eye response is the decisive white
-   challenge signal. Eye response combines blendshape eye-open probability with
-   MediaPipe mesh Eye Aspect Ratio. Both a complete blink and a sustained squint
-   with a sufficient neutral-relative drop are accepted, so a missed reopening
-   frame does not cause a false rejection.
+ระบบนี้ไม่ได้ตัดสินจาก face mesh หรือการพบใบหน้าเพียงอย่างเดียว แต่ให้ผู้ใช้:
 
-During the colour challenge the app immediately sets application brightness to
-100% and renders a 94%-opaque illumination layer from preparation through the
-end of RGBW sampling. A short dark-neutral reference is recorded once before
-the continuous burst; the eye check is
-bound to one randomly selected white pulse, so a prerecorded video cannot know
-when the app will inspect the eye-open sequence. The detector must first see an
-open-eye frame after that pulse begins, then a neutral-relative close/squint;
-a blink already underway before the challenge is not accepted. The instruction UI remains
-clearly visible. The app
-chooses a camera exposure offset from measured face luminance and collects one
-shared 200 ms neutral reference immediately before the burst. The four colours
-then run continuously with no dark gaps: red, green and blue last 400 ms each,
-while the white blink-observation pulse lasts 800 ms, for exactly 2,000 ms of
-illumination. Every RGBW pulse uses 100% intensity; only the colour order is
-randomized. Sampling is based on elapsed time with a
-minimum sample count instead of a fixed frame count. The detector also records
-the first intended-channel change as the real response onset. This produces a
-short one-time sequence while limiting colour carry-over and avoiding
-mistaking slow model FPS for response latency. The user's brightness is
-restored as soon as the scan page closes. The full scan timeout is 75 seconds.
-Chromatic response thresholds are reduced modestly when that colour's neutral
-baseline is already bright, while still requiring at least two of three RGB
-channels plus the randomized white-pulse blink.
+1. อยู่ในระยะเริ่มต้นที่กำหนด
+2. ขยับใบหน้าเข้ามาใกล้กล้อง
+3. ตอบสนองต่อรหัสแสง RGBW แบบสุ่ม
+4. กระพริบตาหรือหรี่ตาระหว่างแสงสีขาว
+5. หันศีรษะสองด้านและค้างด้านละ 1 วินาที
+6. ผ่านเงื่อนไข anti-spoof และหลักฐานรวมทั้งหมด
 
-The near guide uses a larger face-shaped outline and accepts the detected face
-from 50% of the image width. Before RGB sampling, outer-background
-brightness is compared with the central face region. A backlight warning now
-requires a severely underexposed face below 80 luma, a bright background over
-210 luma, a ratio over 2.20, and six consecutive frames. A white or brightly
-coloured wall is therefore accepted while the face remains readable. Three
-recovered frames are required before sampling resumes, preventing one-frame
-auto-exposure changes from resetting a valid baseline.
-It also pauses baseline and colour sampling when the face ROI is overexposed or
-too many sampled pixels are saturated, because clipped RGB channels cannot
-provide trustworthy colour-reflection evidence.
+เมื่อสแกนเสร็จ แอปจะแสดงผลการตรวจสอบและภาพเต็มเฟรมที่ชัดที่สุดซึ่งคัดเลือกไว้
+ระหว่างการสแกน
 
-RGB sampling uses an invisible dynamic rectangular ROI derived from the actual
-face bounding box and mapped back through camera rotation. In addition to the
-whole inner face, forehead, both cheeks and the central nose area are sampled
-separately. Each region must correlate over time with the same randomized
-pulse code, making a single global brightness change insufficient. Background
-light is sampled outside a 1.5x expanded face ROI.
-Face discovery still runs on the full frame so an off-centre user can recover.
+> โครงการนี้เป็น prototype สำหรับการทดลอง ไม่ใช่ระบบ Presentation Attack
+> Detection (PAD) ที่ผ่านการรับรอง และไม่ควรใช้เป็นหลักฐานยืนยันตัวตนเพียงอย่างเดียว
+> ในระบบที่มีความเสี่ยงสูง
 
-Each RGBW pulse is bound to a cryptographically shuffled per-scan order and a
-short response window. If the face leaves the accepted distance or the camera
-cannot collect enough samples before the two-second deadline, that attempt is
-stopped instead of silently extending or restarting the burst. The object detector continues running throughout the
-scan (not only at entry), so a phone, TV, laptop or book introduced later is
-rejected. Face-ROI sampling also counts repeated high-frequency chroma jumps;
-several consecutive frames with screen-like pixel or moire texture are rejected.
-Near-stage object detections additionally need high confidence, sustained
-detection, and a media box that encloses and extends beyond the face. This
-prevents a close real face from being rejected by a one-frame `cell phone`
-misclassification.
-After illumination, opposite head turns must produce coherent,
-opposite nose-to-cheek landmark displacement and enough temporal parallax;
-moving a flat image around the frame is therefore not accepted as head motion.
-The scanner also records a compact brightness-normalized 63-bit face hash over
-the session. Very low visual diversity and repeated eight-frame loops are used
-as replay evidence. At completion a combined anti-spoof score fuses temporal
-multi-region correlation, frame diversity, screen texture, eye response and
-3-D parallax; the classification cannot pass when this score or any mandatory
-active check fails.
+## ความสามารถหลัก
 
-Brightness limits are calibrated in a dedicated 10-frame pre-calibration phase
-before normal overexposure filtering begins and are tagged with the active
-front-camera profile. Hard upper safety caps remain in place, while the session
-thresholds adapt to differences between front-camera sensors and ambient
-exposure. The accepted 50%-90% face-width range is enforced throughout RGB and
-head-turn collection, not only when entering the near stage.
+- ตรวจจับใบหน้า, bounding box, head pose, face mesh 468 จุด และสถานะดวงตา
+- ตรวจหาโทรศัพท์ โทรทัศน์ แล็ปท็อป และหนังสือที่อาจใช้แสดงภาพปลอม
+- ตรวจระยะใบหน้าจากสัดส่วนความกว้างใบหน้าต่อภาพกล้อง
+- ปรับความสว่างแอปเป็น 100% ชั่วคราวสำหรับ RGBW challenge
+- สุ่มลำดับสีแดง เขียว น้ำเงิน และขาวใหม่ในแต่ละรอบ
+- ตรวจการสะท้อนของสีหลายบริเวณบนใบหน้า
+- ตรวจการกระพริบตาหรือหรี่ตาระหว่างแสงขาว
+- ตรวจการหันศีรษะสองด้านพร้อม parallax จากจมูกและแก้ม
+- ตรวจความหลากหลายของเฟรมและลำดับเฟรมซ้ำที่คล้าย replay
+- คัดเลือกภาพเต็มเฟรมที่ชัดที่สุดโดยไม่บันทึกลง Gallery
+- คืนค่าความสว่างหน้าจอเมื่อสแกนจบ ยกเลิก หรือออกจากหน้าสแกน
 
-Head-turn parallax is measured against a multi-frame neutral pose. Each side is
-held for several frames and reduced with a median before the two neutral-relative
-deltas are compared. Single noisy landmark frames and natural facial asymmetry
-therefore no longer decide the result. Frame-processing exceptions are logged
-and a sustained error is returned explicitly instead of silently timing out.
+## เทคโนโลยีที่ใช้
 
-The detector is `face_detection_tflite` (MediaPipe models running on-device).
-It supplies the bounding box, 468-point mesh, head pose and eye blendshapes.
-`object_detection` supplies the on-device EfficientDet-Lite object gate.
-The screen-light measurement is calculated directly from `camera` image
-frames, so no network service or additional liveness SDK is required.
+| ส่วน | หน้าที่ |
+| --- | --- |
+| `camera` | รับภาพจากกล้องหน้าแบบต่อเนื่อง |
+| `face_detection_tflite` | ตรวจใบหน้า, mesh, head pose และค่าการเปิดตา |
+| `object_detection` | ตรวจวัตถุที่อาจเป็นสื่อสำหรับนำเสนอภาพปลอม |
+| `screen_brightness` | เพิ่มและคืนค่าความสว่างหน้าจอ |
+| `flutter_litert` | ช่วยจัดรูปแบบและหมุนข้อมูลเฟรมกล้อง |
 
-While a scan is running, the app also filters eligible non-colour frames for
-open eyes, frontal pose, exposure and sufficient face size, then ranks them
-primarily with Laplacian focus energy plus a smaller gradient measure. Pose,
-eye, exposure, size and mesh quality are only tie-breakers between similarly
-sharp frames. Automatic camera focus/exposure remain enabled while candidates
-are collected. Only the highest-scoring frame is retained in memory. At
-completion the entire camera frame is rotated and mirrored to match the
-front-camera preview, scaled down to at most 800 pixels on its long edge while
-preserving the camera's native aspect ratio, and encoded as PNG for the
-on-device summary card. Camera row stride
-and YUV layout are normalized first for NV12, NV21 and I420 devices, with a
-luma-only fallback rather than returning a black image when chroma is
-unavailable. The capture is not
-written to the gallery or another persistent file by this prototype.
+การตรวจหลักทำบนอุปกรณ์ ไม่ต้องส่งภาพไปยังเซิร์ฟเวอร์
 
-This is a prototype, not certified biometric presentation-attack detection.
-Thresholds (light-response constants, face-size ranges, pose angles) must be
-calibrated on the actual supported phone models and lighting conditions before
-production use. High-assurance identity verification should use a certified
-PAD SDK or hardware depth/IR sensor.
+## ขั้นตอนการทำงาน
 
-## Getting Started
+### ด่าน 1 — ตรวจใบหน้าในระยะเริ่มต้น
 
-This project is a starting point for a Flutter application.
+- เปิดกล้องหน้าและโหลดโมเดลตรวจใบหน้า/วัตถุ
+- ต้องพบใบหน้าที่มีความมั่นใจเพียงหนึ่งใบ
+- ใบหน้าต้องมีความกว้างประมาณ 20%–42% ของภาพกล้อง
+- ต้องอยู่ในตำแหน่งที่ยอมรับได้ต่อเนื่องหลายเฟรม
+- ตรวจหา `cell phone`, `tv`, `laptop` และ `book`
+- หากพบสื่อที่น่าสงสัยต่อเนื่อง ระบบจะไม่อนุญาตให้ไปด่านถัดไป
 
-A few resources to get you started if this is your first Flutter project:
+ด่านนี้ยืนยันเพียงว่า “พบใบหน้าในสภาพแวดล้อมที่ยอมรับได้”
+ยังไม่สามารถยืนยันว่าเป็นบุคคลจริงได้ด้วยตัวมันเอง
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+### ด่าน 2 — ขยับเข้ามาใกล้และเตรียมแสง
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- ขยายกรอบและขอให้ผู้ใช้ขยับใบหน้าเข้ามาใกล้
+- รับใบหน้าที่มีความกว้างประมาณ 50%–90% ของภาพกล้อง
+- ตรวจความสว่างและสัดส่วนแสงระหว่างใบหน้ากับพื้นหลัง
+- พื้นหลังสีขาวหรือสีสว่างไม่ถูกนับเป็นแสงจ้าโดยอัตโนมัติ
+- แจ้งเตือน backlight เมื่อพื้นหลังสว่างมากพร้อมกับใบหน้ามืดจริงต่อเนื่องหลายเฟรม
+- เก็บ pre-calibration และ baseline เพื่อชดเชยกล้อง/สภาพแสงของแต่ละเครื่อง
+
+### ด่าน 3 — RGBW และดวงตา
+
+ระบบเพิ่มความสว่างของแอปเป็น 100% และฉายสี 4 สีต่อเนื่องรวม 2 วินาที:
+
+| สี | ระยะเวลา | ความเข้ม |
+| --- | ---: | ---: |
+| แดง | 400 ms | 100% |
+| เขียว | 400 ms | 100% |
+| น้ำเงิน | 400 ms | 100% |
+| ขาว | 800 ms | 100% |
+
+- ลำดับ RGBW ถูกสุ่มใหม่ทุกการสแกน แต่ความเข้มของทุกสีคงที่ 100%
+- ไม่มีช่วงมืดคั่นระหว่างสี เพื่อลดเวลา challenge ให้เหลือ 2 วินาที
+- เก็บค่าสีจากใบหน้าโดยรวม หน้าผาก แก้มซ้าย แก้มขวา และจมูก
+- ตรวจว่าการเปลี่ยนแปลงของสีบนแต่ละบริเวณสัมพันธ์กับรหัสสีที่ฉายจริง
+- ต้องพบการตอบสนองอย่างน้อย 2 จาก 3 สี RGB
+- ระหว่างแสงขาว ระบบตรวจการกระพริบตาหรือหรี่ตาแบบไม่บอกล่วงหน้า
+- ตรวจทั้ง eye-open probability และ Eye Aspect Ratio จาก face mesh
+- การกระพริบที่เริ่มก่อนแสงขาวจะไม่ถูกนับเป็นคำตอบของ challenge
+- ถ้าใบหน้าออกนอกระยะหรือเก็บตัวอย่างไม่ทัน deadline ระบบจะหยุดรอบนั้น
+
+ค่าการสะท้อนแสงขาวใช้เป็นข้อมูลประกอบ ไม่ใช่เงื่อนไขตัดสินเพียงค่าเดียว
+เพราะห้องที่สว่างมากอาจทำให้กล้องไม่มี exposure headroom เพิ่มเติม
+
+### ด่าน 4 — หันศีรษะสองด้าน
+
+- เก็บค่าหน้าตรงหลายเฟรมเป็น neutral reference
+- ขอให้หันไปด้านหนึ่งและค้างต่อเนื่อง 1 วินาที
+- แสดงเวลานับถอยหลังจนค้างครบ แล้วให้กลับมามองตรง
+- ขอให้หันไปด้านตรงข้ามและค้างอีก 1 วินาที
+- หากกลับมามองตรงเร็วเกินไป จะเริ่มเก็บเฉพาะด้านปัจจุบันใหม่
+- ใช้ค่ากลางของหลายเฟรมเพื่อลดผลจาก landmark ที่สั่น
+- ตรวจว่าจมูกและแก้มเคลื่อนที่สัมพันธ์กับทิศทางการหันแบบสามมิติ
+- ตรวจ temporal parallax เพื่อแยกการหันศีรษะออกจากการเลื่อนภาพแบน
+
+### ด่าน 5 — รวมผลและแสดงหน้าสรุป
+
+ระบบตรวจเงื่อนไขบังคับและคำนวณคะแนนหลักฐาน anti-spoof
+จากนั้นจึงตัดสินเป็น `realPerson` หรือ `photo`
+
+ก่อนกลับหน้าหลัก ระบบจะ:
+
+1. คืนค่าความสว่างหน้าจอ
+2. หยุด image stream ของกล้อง
+3. หมุนและ mirror ภาพที่เลือกไว้ให้ตรงกับ preview
+4. ลดขนาดภาพให้ด้านยาวไม่เกิน 800 พิกเซลโดยรักษาสัดส่วน
+5. เข้ารหัสเป็น PNG ในหน่วยความจำ
+6. ส่งผลและภาพกลับไปแสดงในหน้าสรุป
+
+## Flow การทำงาน
+
+```mermaid
+flowchart TD
+    A["กดเริ่มสแกน"] --> B["ขอสิทธิ์กล้องและเปิดกล้องหน้า"]
+    B --> C{"โหลด Face Detector และ Object Detector สำเร็จ?"}
+    C -- "ไม่สำเร็จ" --> X["จบด้วยเหตุผลผิดพลาด"]
+    C -- "สำเร็จ" --> D["ด่าน 1: ตรวจใบหน้าในระยะ 20%–42%"]
+
+    D --> E{"พบใบหน้าเดียวและไม่พบสื่อน่าสงสัยต่อเนื่อง?"}
+    E -- "ไม่ผ่าน" --> D
+    E -- "ผ่าน" --> F["ด่าน 2: ขยับใบหน้าเข้าใกล้ 50%–90%"]
+
+    F --> G{"ใบหน้าชัด ระยะถูกต้อง และไม่เกิด backlight รุนแรง?"}
+    G -- "ไม่ผ่าน" --> F
+    G -- "ผ่าน" --> H["Pre-calibration และเก็บ baseline"]
+
+    H --> I["เพิ่มความสว่างแอปเป็น 100%"]
+    I --> J["ด่าน 3: ฉาย RGBW แบบสุ่มต่อเนื่อง 2 วินาที"]
+    J --> K["ตรวจสีหลายบริเวณ + blink/squint ระหว่างแสงขาว"]
+    K --> L{"สีผ่าน ≥ 2/3, ดวงตาผ่าน, เวลาและ correlation ผ่าน?"}
+    L -- "ไม่ผ่าน" --> X
+    L -- "ผ่าน" --> M["ด่าน 4: เก็บ neutral pose"]
+
+    M --> N["หันด้านแรกและค้าง 1 วินาที"]
+    N --> O{"ค้างครบแล้วกลับมามองตรง?"}
+    O -- "ยังไม่ครบ" --> N
+    O -- "ครบ" --> P["หันด้านตรงข้ามและค้าง 1 วินาที"]
+    P --> Q{"ค้างครบ + motion coherence + parallax ผ่าน?"}
+    Q -- "ไม่ผ่าน" --> X
+    Q -- "ผ่าน" --> R["รวมหลักฐาน anti-spoof"]
+
+    R --> S{"เงื่อนไขบังคับและคะแนนรวมผ่านทั้งหมด?"}
+    S -- "ไม่ผ่าน" --> X
+    S -- "ผ่าน" --> T["ยืนยันเป็นบุคคลจริง"]
+
+    X --> U["คืนค่าความสว่างและหยุดกล้อง"]
+    T --> U
+    U --> V["เข้ารหัสภาพเต็มเฟรมที่ชัดที่สุด"]
+    V --> W["แสดงผลและภาพในหน้าสรุป"]
+```
+
+## เงื่อนไขบังคับกับคะแนน anti-spoof ต่างกันอย่างไร
+
+ระบบใช้การตัดสินสองชั้น:
+
+### 1. เงื่อนไขบังคับ (mandatory gates)
+
+เงื่อนไขสำคัญต้องผ่านครบ เช่น:
+
+- ตอบสนองต่อ RGB อย่างน้อย 2 จาก 3 สี
+- กระพริบตาหรือหรี่ตาตรงกับช่วงแสงขาว
+- ลำดับการตอบสนองอยู่ภายในเวลาที่กำหนด
+- สีหลายบริเวณบนใบหน้าสัมพันธ์กับ challenge
+- หันศีรษะครบสองด้าน
+- motion coherence และ parallax ผ่าน
+- ไม่พบหลักฐาน replay/frame loop ที่ชัดเจน
+
+ถ้าเงื่อนไขบังคับข้อใดไม่ผ่าน ระบบจะไม่ยืนยันว่าเป็นบุคคลจริง
+แม้คะแนนรวมจะสูง
+
+### 2. คะแนนหลักฐานรวม (combined anti-spoof evidence)
+
+คะแนนรวมใช้หลักฐานหลายชนิดเพื่อช่วยลดการตัดสินจากสัญญาณเดียว:
+
+- ความสัมพันธ์ของสีตามเวลาในหลายบริเวณ
+- ความหลากหลายของเฟรม
+- texture ที่คล้ายจอภาพหรือ moiré
+- การตอบสนองของดวงตา
+- parallax/depth จากการหันศีรษะ
+- หลักฐาน replay
+
+คะแนนผ่านปัจจุบันคืออย่างน้อย `0.58` และยังต้องไม่มีข้อห้ามสำคัญ
+ดังนั้นคะแนนรวมเป็น “หลักฐานเสริมประกอบกัน” ไม่ได้ใช้แทนเงื่อนไขบังคับ
+
+## การตรวจภาพถ่าย หน้าจอ และวิดีโอ
+
+ระบบใช้หลายกลไกร่วมกัน:
+
+- Object detector ตรวจกรอบอุปกรณ์หรือสื่อที่ครอบใบหน้า
+- ตรวจ high-frequency chroma/ลักษณะ moiré เป็นหลักฐานประกอบ
+- ตรวจรหัส RGBW ที่สุ่มใหม่ในแต่ละรอบ
+- ตรวจ blink/squint ที่เริ่มหลังแสงขาว
+- ตรวจความสัมพันธ์ของสีแยกหลายบริเวณบนใบหน้า
+- สร้าง brightness-normalized face hash แบบ 63 บิต
+- ตรวจความหลากหลายของภาพและลูปเฟรมซ้ำ
+- ตรวจการเคลื่อนไหวสามมิติจาก head pose และ parallax
+
+Object detector ทำงานในช่วงตรวจระยะและช่วงหันศีรษะ
+แต่พักระหว่างการเก็บ RGBW เพื่อให้การประมวลผลแสงต่อเนื่องทัน deadline
+
+ไม่มีสัญญาณใดป้องกัน replay ได้สมบูรณ์เพียงลำพัง
+ระบบจึงกำหนดให้ active challenge และหลักฐานหลายชนิดต้องสอดคล้องกัน
+
+## การเลือกภาพที่ชัดที่สุด
+
+ระบบไม่ได้ถ่ายภาพเพียงครั้งเดียวตอนจบ แต่ประเมินภาพผู้สมัครระหว่าง:
+
+- ช่วงขยับเข้าใกล้
+- ช่วงเตรียมและเก็บ baseline
+- ช่วงหันศีรษะเมื่อใบหน้ากลับมาอยู่ใน pose ที่ยอมรับได้
+
+ระบบไม่เลือกภาพจากช่วงที่อยู่ไกล ช่วงฉายแสงสี หรือเมื่อพบสื่อน่าสงสัย
+ภาพผู้สมัครต้อง:
+
+- ลืมตาหรือมี Eye Aspect Ratio ที่ยอมรับได้
+- มองค่อนข้างตรง
+- มีขนาดใบหน้าและ exposure ที่เหมาะสม
+- ไม่มี saturated pixels มากเกินไป
+
+ความคมชัดให้น้ำหนักหลักจาก Laplacian focus energy และ gradient
+ส่วน pose, ดวงตา, exposure, ขนาดใบหน้า และ mesh confidence
+ใช้ช่วยตัดสินเมื่อภาพมีความคมใกล้เคียงกัน
+
+เก็บไว้ในหน่วยความจำเพียงภาพที่ได้คะแนนดีที่สุด ภาพที่แสดงเป็นภาพเต็มเฟรม
+ไม่ตัดเฉพาะใบหน้า และไม่เขียนลง Gallery หรือไฟล์ถาวรโดย prototype นี้
+
+## โครงสร้างโค้ด
+
+```text
+lib/
+├── main.dart                         # จุดเริ่มแอปและ Theme
+├── models/
+│   └── liveness_models.dart          # โมเดลข้อมูลและการจำแนกผล
+├── pages/
+│   ├── home_page.dart                # หน้าหลักและหน้าสรุป
+│   └── liveness_capture_page.dart    # กล้องและ liveness workflow
+└── widgets/
+    └── face_guide_painter.dart       # วาดกรอบแนะนำตำแหน่งใบหน้า
+```
+
+ไฟล์ถูกแยกด้วย Dart `part` เพื่อรักษาขอบเขต private API ของ prototype เดิม
+และลดความเสี่ยงจากการเปลี่ยนพฤติกรรมระหว่าง refactor
+
+## การติดตั้งและรัน
+
+ต้องมี Flutter SDK และอุปกรณ์ Android/iOS ที่มีกล้องหน้า:
+
+```bash
+flutter pub get
+flutter run
+```
+
+ตรวจคุณภาพโค้ด:
+
+```bash
+flutter analyze
+flutter test
+```
+
+สร้าง Android debug APK:
+
+```bash
+flutter build apk --debug
+```
+
+## ค่าหลักใน prototype ปัจจุบัน
+
+| ค่า | การตั้งค่า |
+| --- | ---: |
+| Scan timeout | 75 วินาที |
+| ระยะเริ่มต้น | 20%–42% ของความกว้างภาพ |
+| ระยะใกล้ | 50%–90% ของความกว้างภาพ |
+| RGB pulse | สีละ 400 ms |
+| White pulse | 800 ms |
+| RGBW challenge รวม | 2 วินาที |
+| ความเข้มทุกสี | 100% |
+| หันศีรษะ | ด้านละ 1 วินาที |
+| Anti-spoof score ขั้นต่ำ | 0.58 |
+| ภาพสรุป | ด้านยาวไม่เกิน 800 px |
+
+ค่าพวกนี้ควรทดสอบและปรับเทียบกับรุ่นโทรศัพท์ กล้องหน้า สีผิว
+อุปกรณ์เสริม และสภาพแสงจริงก่อนนำไปใช้ใน production
+
+## ข้อจำกัดและข้อควรระวัง
+
+- กล้อง RGB ทั่วไปไม่มีข้อมูล depth/IR จริงเหมือนฮาร์ดแวร์เฉพาะ
+- วิดีโอ replay ที่เตรียมมาอย่างซับซ้อนอาจเลียนแบบพฤติกรรมบางส่วนได้
+- กล้องแต่ละรุ่นมี auto-exposure, white balance และ FPS ต่างกัน
+- แว่นตา หน้าม้า การหลับตาไม่สนิท และแสงจัดอาจกระทบ eye signal
+- Object detector อาจเกิด false positive จึงต้องอาศัยหลายเฟรมและตำแหน่งกรอบ
+- ระบบ production ควรมี server-generated nonce/session challenge
+- งานยืนยันตัวตนความเสี่ยงสูงควรใช้ PAD SDK ที่ผ่านการรับรอง
+  หรือกล้อง depth/IR
+
+ก่อนจัดเก็บหรือส่งภาพผู้ใช้ ต้องมีข้อความยินยอม นโยบายความเป็นส่วนตัว
+ระยะเวลาการเก็บรักษา และมาตรการรักษาความปลอดภัยที่เหมาะสม
