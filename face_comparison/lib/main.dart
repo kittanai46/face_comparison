@@ -1,22 +1,9 @@
-import 'dart:async';
-import 'dart:io';
-import 'dart:math';
-import 'dart:ui' as ui;
+import 'dart:typed_data';
 
-import 'package:camera/camera.dart';
-import 'package:face_detection_tflite/face_detection_tflite.dart';
+import 'package:active_face_liveness/active_face_liveness.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_litert/flutter_litert.dart'
-    show CameraFrameRotation, YuvLayout, packYuv420, rotationForFrame;
-import 'package:object_detection/object_detection.dart' as od;
-import 'package:permission_handler/permission_handler.dart';
-import 'package:screen_brightness/screen_brightness.dart';
 
-part 'models/liveness_models.dart';
 part 'pages/home_page.dart';
-part 'pages/liveness_capture_page.dart';
-part 'widgets/face_guide_painter.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();

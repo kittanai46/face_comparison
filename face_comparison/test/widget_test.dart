@@ -1,4 +1,4 @@
-import 'package:face_comparison/main.dart';
+import 'package:active_face_liveness/active_face_liveness.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

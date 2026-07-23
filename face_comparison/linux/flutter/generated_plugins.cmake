@@ -4,7 +4,6 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   face_detection_tflite
-  file_selector_linux
   object_detection
 )
 

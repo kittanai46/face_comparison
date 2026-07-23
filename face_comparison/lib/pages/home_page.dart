@@ -1,5 +1,17 @@
 part of '../main.dart';
 
+class _ScanSummaryItem {
+  const _ScanSummaryItem({
+    required this.title,
+    required this.detail,
+    required this.passed,
+  });
+
+  final String title;
+  final String detail;
+  final bool? passed;
+}
+
 class FaceComparisonHomePage extends StatefulWidget {
   const FaceComparisonHomePage({super.key});
 
@@ -11,70 +23,15 @@ class _FaceComparisonHomePageState extends State<FaceComparisonHomePage> {
   bool _livenessVerified = false;
   bool? _blinkDetected;
   bool? _antiSpoofPassed;
-  String _scanMessage = 'กล้องกำลังเตรียมความพร้อม...';
+  String _scanMessage = 'พร้อมเรียกใช้ระบบสแกนจาก active_face_liveness';
   String _scanClassification = 'ยังไม่ทราบ';
   List<_ScanSummaryItem>? _scanSummary;
   Uint8List? _capturedFaceImage;
-
-  /// Only the device's own front-facing camera is ever used. There is no
-  /// fallback to the back camera or any other capture source.
-  CameraDescription? _frontCamera;
-  bool _cameraReady = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeCamera();
-  }
-
-  Future<void> _initializeCamera() async {
-    try {
-      final cameras = await availableCameras();
-      final frontCameras = cameras.where(
-        (c) => c.lensDirection == CameraLensDirection.front,
-      );
-      if (!mounted) return;
-      setState(() {
-        if (frontCameras.isEmpty) {
-          _cameraReady = false;
-          _frontCamera = null;
-          _scanMessage = 'ไม่พบกล้องหน้าบนอุปกรณ์นี้ ไม่สามารถสแกนใบหน้าได้';
-        } else {
-          _frontCamera = frontCameras.first;
-          _cameraReady = true;
-          _scanMessage = 'กล้องหน้าพร้อมแล้ว สามารถเริ่มสแกนได้';
-        }
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _cameraReady = false;
-        _scanMessage = 'ไม่สามารถเข้าถึงกล้องหน้าของเครื่องได้';
-      });
-    }
-  }
+  bool _scanning = false;
 
   Future<void> _startScan() async {
-    if (!_cameraReady || _frontCamera == null) {
-      setState(() {
-        _scanMessage = 'ไม่พบกล้องหน้าบนอุปกรณ์นี้ ไม่สามารถสแกนใบหน้าได้';
-      });
-      return;
-    }
-
-    if (Platform.isAndroid || Platform.isIOS) {
-      final cameraStatus = await Permission.camera.request();
-      if (!cameraStatus.isGranted) {
-        if (!mounted) return;
-        setState(() {
-          _scanMessage = 'กรุณาอนุญาตกล้องเพื่อเปิดหน้าสแกน';
-        });
-        return;
-      }
-    }
-
-    if (!mounted) return;
     setState(() {
+      _scanning = true;
       _livenessVerified = false;
       _blinkDetected = null;
       _antiSpoofPassed = null;
@@ -82,103 +39,106 @@ class _FaceComparisonHomePageState extends State<FaceComparisonHomePage> {
       _scanMessage = 'กำลังตรวจสอบว่าเป็นใบหน้าจริง กรุณาทำตามคำแนะนำบนจอ';
     });
 
-    final result = await Navigator.push<Map<String, dynamic>>(
+    final result = await ActiveFaceLiveness.start(
       context,
-      MaterialPageRoute(
-        builder: (_) => LivenessCaptureView(cameraDescription: _frontCamera!),
+      config: const LivenessConfig(
+        imageOutput: LivenessImageOutput.pngBytes,
+        capturedImageContrast: 1,
+        capturedImageMaxLongEdge: 800,
       ),
     );
 
     if (!mounted) return;
+    if (result.cancelled) {
+      setState(() {
+        _scanning = false;
+        _scanMessage = 'ยกเลิกการสแกนแล้ว';
+      });
+      return;
+    }
+
     setState(() {
-      final classificationLabel = result?['classificationLabel'] as String?;
-      final isRealPerson = classificationLabel == 'คนจริง';
-      final failureReason = result?['failureReason'] as String?;
+      _scanning = false;
+      final classificationLabel = livenessClassificationLabel(
+        result.classification,
+      );
+      final isRealPerson = result.isLive;
+      final failureReason = result.failureReason;
+      final evidence = result.evidence;
+      final technical = result.technicalDetails;
       _livenessVerified = isRealPerson;
-      final blinkAttempted = result?['blinkChallengeAttempted'] == true;
-      _blinkDetected = blinkAttempted
-          ? (result?['blinkDetected'] as bool?)
-          : null;
-      _antiSpoofPassed = result?['passiveAntiSpoofPassed'] as bool?;
-      _capturedFaceImage = result?['bestFaceImage'] as Uint8List?;
-      _scanClassification = classificationLabel ?? 'ยังไม่ทราบ';
+      final blinkAttempted = technical['blinkChallengeAttempted'] == true;
+      _blinkDetected = blinkAttempted ? evidence.blinkChallengePassed : null;
+      _antiSpoofPassed = evidence.passiveAntiSpoofPassed;
+      _capturedFaceImage = result.pngBytes;
+      _scanClassification = classificationLabel;
       _scanMessage = isRealPerson
           ? 'ผลลัพธ์: ใบหน้าถูกจัดว่าเป็นคนจริง'
           : failureReason != null
           ? 'ยังยืนยันว่าเป็นคนจริงไม่ได้: $failureReason'
           : 'ผลลัพธ์: ใบหน้าถูกจัดว่าเป็นภาพถ่าย';
 
-      if (result == null) {
-        _scanSummary = null;
-      } else {
-        final firstTurnPassed = result['turnOneDetected'] == true;
-        final secondTurnPassed = result['turnTwoDetected'] == true;
-        final movementPassed =
-            result['motionCoherencePassed'] == true &&
-            result['parallaxPassed'] == true;
-        final blinkPassed = result['blinkDetected'] == true;
-        final lightPassed = result['lightChallengePassed'] == true;
-        final temporalPassed = result['temporalCorrelationPassed'] == true;
-        final matchedColors = result['matchedColorCount'] as int? ?? 0;
-        final replayRisk =
-            result['replayScreenPassed'] != true ||
-            result['frameReplayDetected'] == true;
-        final antiSpoofPassed = result['passiveAntiSpoofPassed'] == true;
-        _scanSummary = [
-          _ScanSummaryItem(
-            title: 'ผลการยืนยัน',
-            detail: classificationLabel ?? 'ยังไม่ทราบผล',
-            passed: isRealPerson,
-          ),
-          _ScanSummaryItem(
-            title: 'หันหน้าด้านแรก',
-            detail: firstTurnPassed ? 'ตรวจพบแล้ว' : 'ยังไม่สำเร็จ',
-            passed: firstTurnPassed,
-          ),
-          _ScanSummaryItem(
-            title: 'หันหน้าอีกด้าน',
-            detail: secondTurnPassed ? 'ตรวจพบแล้ว' : 'ยังไม่สำเร็จ',
-            passed: secondTurnPassed,
-          ),
-          _ScanSummaryItem(
-            title: 'การเคลื่อนไหวใบหน้า 3 มิติ',
-            detail: movementPassed
-                ? 'จมูกและแก้มเคลื่อนไหวสัมพันธ์กัน'
-                : 'ยังตรวจความลึกจากการเคลื่อนไหวไม่ได้',
-            passed: movementPassed,
-          ),
-          _ScanSummaryItem(
-            title: 'การกะพริบหรือหรี่ตา',
-            detail: !blinkAttempted
-                ? 'ยังไม่ถึงขั้นตอนตรวจดวงตา'
-                : blinkPassed
-                ? 'ตรวจพบการตอบสนองของดวงตา'
-                : 'ยังตรวจไม่พบการตอบสนอง',
-            passed: blinkAttempted ? blinkPassed : null,
-          ),
-          _ScanSummaryItem(
-            title: 'สีสะท้อนบนใบหน้า',
-            detail: '$matchedColors/3 สี',
-            passed: lightPassed,
-          ),
-          _ScanSummaryItem(
-            title: 'แสงหลายบริเวณบนใบหน้า',
-            detail: temporalPassed
-                ? 'รูปแบบแสงตรงกับรหัสสุ่ม'
-                : 'รูปแบบแสงยังไม่ตรงตามเกณฑ์',
-            passed: temporalPassed,
-          ),
-          _ScanSummaryItem(
-            title: 'การป้องกันภาพหรือวิดีโอ',
-            detail: replayRisk
-                ? 'พบสัญญาณที่อาจเป็นภาพหรือวิดีโอซ้ำ'
-                : antiSpoofPassed
-                ? 'ไม่พบสัญญาณการเล่นภาพซ้ำ'
-                : 'ยังตรวจหลักฐานไม่ครบทุกขั้นตอน',
-            passed: replayRisk ? false : (antiSpoofPassed ? true : null),
-          ),
-        ];
-      }
+      final movementPassed =
+          evidence.motionCoherencePassed && evidence.parallaxPassed;
+      final replayRisk =
+          !evidence.replayScreenPassed ||
+          technical['frameReplayDetected'] == true;
+      _scanSummary = [
+        _ScanSummaryItem(
+          title: 'ผลการยืนยัน',
+          detail: classificationLabel,
+          passed: isRealPerson,
+        ),
+        _ScanSummaryItem(
+          title: 'หันหน้าด้านแรก',
+          detail: evidence.firstTurnPassed ? 'ตรวจพบแล้ว' : 'ยังไม่สำเร็จ',
+          passed: evidence.firstTurnPassed,
+        ),
+        _ScanSummaryItem(
+          title: 'หันหน้าอีกด้าน',
+          detail: evidence.secondTurnPassed ? 'ตรวจพบแล้ว' : 'ยังไม่สำเร็จ',
+          passed: evidence.secondTurnPassed,
+        ),
+        _ScanSummaryItem(
+          title: 'การเคลื่อนไหวใบหน้า 3 มิติ',
+          detail: movementPassed
+              ? 'จมูกและแก้มเคลื่อนไหวสัมพันธ์กัน'
+              : 'ยังตรวจความลึกจากการเคลื่อนไหวไม่ได้',
+          passed: movementPassed,
+        ),
+        _ScanSummaryItem(
+          title: 'การกะพริบหรือหรี่ตา',
+          detail: !blinkAttempted
+              ? 'ยังไม่ถึงขั้นตอนตรวจดวงตา'
+              : evidence.blinkChallengePassed
+              ? 'ตรวจพบการตอบสนองของดวงตา'
+              : 'ยังตรวจไม่พบการตอบสนอง',
+          passed: blinkAttempted ? evidence.blinkChallengePassed : null,
+        ),
+        _ScanSummaryItem(
+          title: 'สีสะท้อนบนใบหน้า',
+          detail: '${evidence.matchedColorCount}/3 สี',
+          passed: evidence.lightChallengePassed,
+        ),
+        _ScanSummaryItem(
+          title: 'แสงหลายบริเวณบนใบหน้า',
+          detail: evidence.temporalCorrelationPassed
+              ? 'รูปแบบแสงตรงกับรหัสสุ่ม'
+              : 'รูปแบบแสงยังไม่ตรงตามเกณฑ์',
+          passed: evidence.temporalCorrelationPassed,
+        ),
+        _ScanSummaryItem(
+          title: 'การป้องกันภาพหรือวิดีโอ',
+          detail: replayRisk
+              ? 'พบสัญญาณที่อาจเป็นภาพหรือวิดีโอซ้ำ'
+              : evidence.passiveAntiSpoofPassed
+              ? 'ไม่พบสัญญาณการเล่นภาพซ้ำ'
+              : 'ยังตรวจหลักฐานไม่ครบทุกขั้นตอน',
+          passed: replayRisk
+              ? false
+              : (evidence.passiveAntiSpoofPassed ? true : null),
+        ),
+      ];
     });
   }
 
@@ -292,8 +252,8 @@ class _FaceComparisonHomePageState extends State<FaceComparisonHomePage> {
               _buildStepCard(
                 icon: Icons.camera_front,
                 title: 'กล้องหน้า',
-                subtitle: _cameraReady ? 'พร้อมใช้งาน' : 'กำลังตรวจสอบอุปกรณ์',
-                isDone: _cameraReady,
+                subtitle: 'แพ็กเกจจะเลือกกล้องหน้าเมื่อเริ่มสแกน',
+                isDone: true,
               ),
               const SizedBox(height: 10),
               _buildStepCard(
@@ -383,7 +343,7 @@ class _FaceComparisonHomePageState extends State<FaceComparisonHomePage> {
               ),
               const SizedBox(height: 18),
               FilledButton.icon(
-                onPressed: _cameraReady ? _startScan : null,
+                onPressed: _scanning ? null : _startScan,
                 style: FilledButton.styleFrom(
                   minimumSize: const Size.fromHeight(54),
                   shape: RoundedRectangleBorder(

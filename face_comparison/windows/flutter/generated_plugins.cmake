@@ -4,10 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   face_detection_tflite
-  file_selector_windows
-  flutter_tts
   object_detection
-  permission_handler_windows
   screen_brightness_windows
 )
 
